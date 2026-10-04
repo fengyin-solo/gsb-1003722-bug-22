@@ -3,13 +3,74 @@
     <header class="page-head">
       <div>
         <h2>数据整编管理</h2>
-        <p class="page-desc">维护整编成果，围绕成果编号、整编年份、站点编号、整编类型做登记、筛选与状态流转。</p>
+        <p class="page-desc">
+          维护整编成果；整编列表中的水位记录直接取自统一取数链路，研判、变幅、缺测说明与水位详情、预警面板完全一致。
+        </p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记整编成果</button>
         <button class="btn" type="button" @click="exportRows">导出数据整编清单</button>
       </div>
     </header>
+
+    <!-- 整编列表中的水位记录：与水位详情、预警面板同源，不重复判断 -->
+    <section class="panel compilation-water-panel">
+      <header class="panel-head">
+        <h3>水位记录整编</h3>
+        <span class="panel-hint">按观测时间倒序；缺测与阈值缺失均有说明，整编以审核状态与研判结论为准</span>
+      </header>
+      <table v-if="waterRows.length" class="data-table inner-table">
+        <thead>
+          <tr>
+            <th>记录编号</th>
+            <th>站点</th>
+            <th>观测时间</th>
+            <th>当前水位(m)</th>
+            <th>警戒水位(m)</th>
+            <th>保证水位(m)</th>
+            <th>水位变幅(m)</th>
+            <th>研判结论</th>
+            <th>审核状态</th>
+            <th>备注 / 中断原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in waterRows" :key="row.id">
+            <td>{{ row.recordCode }}</td>
+            <td>{{ row.stationName }}<span class="sub-text">{{ row.stationCode }}</span></td>
+            <td>{{ row.observedAt }}</td>
+            <td>
+              {{ formatLevel(row.current) }}
+              <span v-if="hasMissing(row, '当前水位')" class="missing-tag" :title="missingReason(row, '当前水位')">缺</span>
+            </td>
+            <td>
+              {{ formatLevel(row.warningLevel) }}
+              <span v-if="hasMissing(row, '警戒水位')" class="missing-tag" :title="missingReason(row, '警戒水位')">缺</span>
+            </td>
+            <td>
+              {{ formatLevel(row.safetyLevel) }}
+              <span v-if="hasMissing(row, '保证水位')" class="missing-tag" :title="missingReason(row, '保证水位')">缺</span>
+            </td>
+            <td>
+              <template v-if="row.variation !== null">{{ row.variation > 0 ? '+' : '' }}{{ row.variation.toFixed(2) }}</template>
+              <span v-else class="muted-text" :title="row.variationNote">缺测</span>
+            </td>
+            <td><span :class="['verdict-tag', tagClass(row.verdict)]" :title="row.verdictReason">{{ row.verdict }}</span></td>
+            <td>
+              <span :class="['review-tag', reviewClass(row.reviewStatus)]">{{ row.reviewStatus }}</span>
+              <span v-if="row.historical" class="history-tag">历史</span>
+            </td>
+            <td class="reason-cell">
+              <span class="sub-note">{{ row.verdictReason }}</span>
+              <span v-if="row.lastFailReason" class="fail-inline">中断原因：{{ row.lastFailReason }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="empty-state">
+        暂无可整编的水位记录。空态说明：统一取数链路尚未取得任何观测，待采集环节登记记录后，此处会与水位监测页同步出现。
+      </p>
+    </section>
 
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
@@ -79,7 +140,10 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import { waterService } from '@/domain/water'
+import { formatLevel } from '@/domain/water/normalize'
 import type { EntryRow } from '@/data/types'
+import type { WaterRecord, WaterVerdict } from '@/domain/water/types'
 
 const meta = moduleMeta('compilation')
 const columns = ["成果编号", "整编年份", "站点编号", "整编类型", "原始记录数", "整编人", "审核人", "整编状态"]
@@ -98,6 +162,38 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+// 水位记录整编区：只从统一取数链路取数，页面不做任何二次研判
+const waterRows = ref<WaterRecord[]>([])
+
+function hasMissing(row: WaterRecord, field: string): boolean {
+  return row.missing.some((item) => item.field === field)
+}
+function missingReason(row: WaterRecord, field: string): string {
+  return row.missing.find((item) => item.field === field)?.reason ?? '该字段缺测'
+}
+function tagClass(verdict: WaterVerdict): string {
+  return {
+    正常: 'tag-normal',
+    超警戒: 'tag-warning',
+    超保证: 'tag-danger',
+    异常值: 'tag-abnormal',
+    缺测: 'tag-missing',
+    无法研判: 'tag-unknown',
+  }[verdict]
+}
+function reviewClass(status: string): string {
+  return {
+    已采集: 'tag-normal',
+    待审核: 'tag-pending',
+    已通过: 'tag-pass',
+    异常值: 'tag-abnormal',
+  }[status] ?? 'tag-unknown'
+}
+
+function reloadWater() {
+  waterRows.value = waterService.listRecords().items
+}
 
 function resetFilters() {
   filters.value = {}
@@ -131,6 +227,7 @@ function reload() {
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '数据整编列表读取失败'
   }
+  reloadWater()
 }
 
 onMounted(reload)
