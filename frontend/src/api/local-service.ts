@@ -1,9 +1,10 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { mutateWaterLevel } from '@/data/water-level'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
-const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
+const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚', '标记异常', '异常', '重测', '故障', '不合格']
 
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
@@ -28,7 +29,18 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
-export function runAction(key: string, id: number, action: string): ActionResult {
+// 终态：进入这些状态后不再计入「待处理」。各模块最后一个状态及「已通过/已刊印」等结论态都是终态。
+const TERMINAL_STATUSES = new Set(['已通过', '异常值', '已刊印', '已驳回', '已撤销', '已停用', '已合格', '不合格', '已处置', '已验收', '已废止', '已复核'])
+
+export function isTerminalStatus(status: string): boolean {
+  return TERMINAL_STATUSES.has(status)
+}
+
+export function runAction(key: string, id: number, action: string, options: { reviewer?: string; reason?: string; note?: string; expectedRev?: number } = {}): ActionResult {
+  // 水位模块走领域状态机：缺测/异常校验、重试留痕、幂等与并发闸门都在那里。
+  if (key === 'waterlevel') {
+    return mutateWaterLevel(id, action, options)
+  }
   const meta = moduleMeta(key)
   const target = meta.actionTargets[action]
   if (!target) {
@@ -43,12 +55,15 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
   }
-  const lastStatus = meta.statuses[meta.statuses.length - 1]
+  if (options.expectedRev !== undefined && (rows[index].rev ?? 1) !== options.expectedRev) {
+    return { ok: false, message: '该记录已被处理过，页面结论已过期，请刷新后重试' }
+  }
   const updated: EntryRow = {
     ...rows[index],
     status: target,
-    pending: target !== lastStatus,
-    abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    rev: (rows[index].rev ?? 1) + 1,
+    pending: !isTerminalStatus(target),
+    abnormal: NEGATIVE_ACTIONS.some((verb) => action.includes(verb)),
   }
   const next = [...rows]
   next[index] = updated

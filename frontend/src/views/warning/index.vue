@@ -64,9 +64,11 @@
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条预警阈值记录</span>
+      <span>共 {{ total }} 条预警阈值记录；发布生效 / 调整阈值都会对关联站点水位再判定，并写入复核链路</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
+
+    <ReviewPanel source="warning" />
   </section>
 </template>
 
@@ -79,6 +81,8 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import { reviewWarningThresholdChange } from '@/data/water-level'
+import ReviewPanel from '@/views/components/ReviewPanel.vue'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('warning')
@@ -92,6 +96,7 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const reviewPanelRef = ref<InstanceType<typeof ReviewPanel> | null>(null)
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
@@ -114,12 +119,30 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
+  const result = applyAction(meta.key, Number(row.id), action, {
+    expectedRev: row.rev ?? 1,
+  })
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  // 预警阈值入口：发布生效 / 调整阈值后对关联站点水位再判定，并写入复核链路（与水位审核同一条）。
+  if (action === '发布生效' || action === '调整阈值') {
+    reviewWarningThresholdChange({
+      configNo: String(row['配置编号']),
+      station: String(row['站点编号']),
+      monitorType: String(row['监测类型']),
+      action,
+      values: {
+        blue: String(row['蓝色阈值'] ?? ''),
+        yellow: String(row['黄色阈值'] ?? ''),
+        orange: String(row['橙色阈值'] ?? ''),
+        red: String(row['红色阈值'] ?? ''),
+      },
+    })
+  }
   reload()
+  reviewPanelRef.value?.reload()
 }
 
 function reload() {

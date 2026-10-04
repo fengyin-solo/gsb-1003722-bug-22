@@ -67,6 +67,46 @@
       <span>共 {{ total }} 条数据整编记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
+
+    <section class="comp-water">
+      <header class="page-head">
+        <div>
+          <h3>整编水位资料勾稽</h3>
+          <p class="page-desc">进入整编的水位记录按同一套数值判定：缺警戒值不显示正常，变幅与当前水位勾稽，异常/缺测记录不进入可刊印结论。</p>
+        </div>
+      </header>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>记录编号</th><th>站点</th><th>观测时间</th>
+            <th>当前水位</th><th>警戒</th><th>保证</th><th>变幅</th>
+            <th>判定</th><th>审核状态</th><th>可否刊印</th><th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="view in waterViews" :key="String(view.row.id)">
+            <td>{{ view.row['记录编号'] }}</td>
+            <td>{{ view.row['站点编号'] }}</td>
+            <td>{{ view.row['观测时间'] }}</td>
+            <td>{{ formatLevel(view.cur) }}</td>
+            <td>{{ formatLevel(view.warn) }}</td>
+            <td>{{ formatLevel(view.guar) }}</td>
+            <td>{{ formatLevel(view.amp) }}</td>
+            <td><span class="grade-badge" :class="view.grade">{{ view.gradeLabel }}</span></td>
+            <td>{{ view.row.status }}</td>
+            <td>
+              <span :class="publishable(view) ? 'ok-text' : 'error-text'">
+                {{ publishable(view) ? '可刊印' : '暂缓刊印' }}
+              </span>
+            </td>
+            <td class="reason-cell">{{ publishReason(view) }}</td>
+          </tr>
+          <tr v-if="!waterViews.length">
+            <td colspan="11" class="empty-state">暂无可整编的水位记录：缺测记录需先补测并重新校验，阈值缺测需补警戒/保证值</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
   </section>
 </template>
 
@@ -79,6 +119,8 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import { formatLevel, listWaterLevels } from '@/data/water-level'
+import type { WaterLevelView } from '@/data/water-level'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('compilation')
@@ -133,5 +175,42 @@ function reload() {
   }
 }
 
-onMounted(reload)
+// 整编列表里的水位记录直接复用水位领域判定，避免「缺警戒值显示成正常」在这里重演。
+const waterViews = ref<WaterLevelView[]>([])
+
+function publishable(view: WaterLevelView): boolean {
+  return view.row.status === '已通过'
+    && (view.grade === 'normal' || view.grade === 'warning' || view.grade === 'guarantee')
+}
+
+function publishReason(view: WaterLevelView): string {
+  if (publishable(view)) return view.gradeReason
+  if (view.grade === 'missing' || view.grade === 'unknown') return `暂缓刊印：${view.gradeReason}`
+  if (view.grade === 'abnormal') return `暂缓刊印：${view.cur.reason}`
+  if (!view.amplitudeConsistent) return '变幅与当前水位勾稽不符，已重算待复核'
+  return `记录尚未审核通过（当前：${view.row.status}）`
+}
+
+function reloadWater() {
+  waterViews.value = listWaterLevels()
+}
+
+onMounted(() => {
+  reload()
+  reloadWater()
+})
 </script>
+
+<style scoped>
+.comp-water { margin-top: 18px; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.comp-water h3 { margin: 0; font-size: 15px; }
+.grade-badge { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+.grade-badge.normal { background: #e7f6ec; color: #1a7f37; }
+.grade-badge.warning { background: #fef3e2; color: #b54708; }
+.grade-badge.guarantee { background: #fde8e8; color: #b42318; }
+.grade-badge.missing, .grade-badge.unknown { background: #eef2f7; color: #475569; }
+.grade-badge.abnormal { background: #fde8e8; color: #b42318; }
+.reason-cell { max-width: 300px; font-size: 12px; color: var(--muted); }
+.ok-text { color: #1a7f37; }
+.error-text { color: #b42318; }
+</style>
